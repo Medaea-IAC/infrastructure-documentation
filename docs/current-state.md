@@ -33,7 +33,7 @@
 | Check | Resource | Module | Reason |
 |---|---|---|---|
 | CKV2_AWS_64 | `aws_kms_key.this` | redis, s3, secrets-manager | Policy explicitly defined via `aws_iam_policy_document.kms` |
-| CKV2_AWS_50 | `aws_elasticache_replication_group.this` | redis | Failover conditional on `num_cache_clusters >= 2`; AWS rejects it for single-node |
+| CKV2_AWS_50 | `aws_elasticache_replication_group.this` | redis | Failover conditional on `num_cache_clusters >= 2`; AWS rejects it for single-node. Skip placed **inside** resource block (line-before format not recognised by Checkov) |
 
 ## Open PRs — Pending Merge
 
@@ -47,6 +47,7 @@
 | `feature/MEP-52-module-fixes-batch1` | S3 lifecycle `filter {}`; RDS version default |
 | `feature/MEP-52-rds-version-15-5` | RDS version → 15.5 |
 | `feature/MEP-52-checkov-redis-failover-skip` | Checkov CKV2_AWS_50 skip on replication group |
+| `feature/MEP-52-checkov-skip-inside-block` | Move CKV2_AWS_50 skip inside resource block (Checkov format fix) |
 
 ### infra-live
 | Branch | What it fixes |

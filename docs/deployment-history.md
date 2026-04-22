@@ -317,3 +317,22 @@ No changes required in infra-live for either module fix.
 | `CKV2_AWS_50` — Multi-AZ automatic failover must be enabled | `aws_elasticache_replication_group.this` | `feature/MEP-52-checkov-redis-failover-skip` (infra-modules) | Added `#checkov:skip=CKV2_AWS_50` with justification comment |
 
 **Why skip, not fix:** AWS rejects `automatic_failover_enabled=true` with a single node. The module already enforces failover for multi-node clusters via `locals { automatic_failover_enabled = var.num_cache_clusters >= 2 }`. Unconditionally setting `true` would break dev; the skip acknowledges the check and documents the conditional logic.
+
+---
+
+## Phase 13 — Checkov CKV2_AWS_50 Skip Placement Fix
+
+| Issue | Branch | Fix |
+|---|---|---|
+| `#checkov:skip` on line before resource block not recognised by Checkov for CKV2_AWS_50 | `feature/MEP-52-checkov-skip-inside-block` (infra-modules) | Moved skip to first line **inside** the resource block — the format Checkov reliably recognises for HCL |
+
+Skip location changed from:
+```hcl
+#checkov:skip=CKV2_AWS_50:...
+resource "aws_elasticache_replication_group" "this" {
+```
+To:
+```hcl
+resource "aws_elasticache_replication_group" "this" {
+  #checkov:skip=CKV2_AWS_50:...
+```
