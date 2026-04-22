@@ -1,17 +1,37 @@
 # Current Pipeline State
 
-> Single source of truth. Overwritten on each iteration.
+> Single source of truth. Overwritten on each iteration. Last updated: Phase 22+.
 
-## IAM Policies (github-deploy-user-medaea-01)
+---
 
-| File | Sid(s) | Size | Limit |
-|---|---|---|---|
-| `github-deploy-policy-1.json` | NetworkAndEdge | ~4987 chars | 6144 |
-| `github-deploy-policy-2.json` | RDSAndElastiCache, SecretsAndSSM | 5585 chars | 6144 |
-| `github-deploy-policy-3.json` | CloudWatchAndLogs, IAMForECSAndCodeDeploy, CodeDeploy, KMSForEncryption | **4050 chars** | 6144 |
+## IAM Policies — github-deploy-user-medaea-01
 
-### KMS actions in policy-3 (full list)
-`Decrypt, Encrypt, GenerateDataKey, GenerateDataKeyWithoutPlaintext, DescribeKey, ListAliases, ListKeys, ListResourceTags, ListGrants, CreateKey, TagResource, UntagResource, PutKeyPolicy, GetKeyPolicy, EnableKeyRotation, DisableKeyRotation, GetKeyRotationStatus, ScheduleKeyDeletion, CancelKeyDeletion, CreateAlias, DeleteAlias, UpdateAlias, CreateGrant, RetireGrant, RevokeGrant, ReEncryptFrom, ReEncryptTo`
+| File | AWS Policy Name | Size | Limit | Status |
+|---|---|---|---|---|
+| `github-deploy-policy-1.json` | `MedaeaGitHubDeployPolicy-1` | ~5,153 chars | 6,144 | ✅ OK |
+| `github-deploy-policy-2.json` | `MedaeaGitHubDeployPolicy-2` | ~5,645 chars | 6,144 | ✅ OK |
+| `github-deploy-policy-3.json` | `MedaeaGitHubDeployPolicy-3` | ~4,246 chars | 6,144 | ✅ OK |
+
+### Complete Action List — Policy 1 (VPCAndNetworking, WAFv2, ACM, CloudFront, Route53)
+
+Key additions vs original:
+- `ec2:GetSecurityGroupsForVpc` — needed by ELBv2 CreateLoadBalancer
+- `wafv2:PutLoggingConfiguration`, `wafv2:GetLoggingConfiguration`, `wafv2:DeleteLoggingConfiguration`
+
+### Complete Action List — Policy 2 (ELB, ECS, ECR, RDS, ElastiCache, SSM, Secrets)
+
+Key additions vs original:
+- `elasticloadbalancing:DescribeListenerAttributes`
+
+### Complete Action List — Policy 3 (CloudWatch, Logs, SNS, IAM, CodeDeploy, KMS)
+
+Key additions vs original:
+- `cloudwatch:ListTagsForResource`
+- `logs:PutResourcePolicy`, `logs:DescribeResourcePolicies`, `logs:DeleteResourcePolicy`
+- `sns:GetSubscriptionAttributes`
+- All KMS grant actions: `kms:CreateGrant`, `kms:RetireGrant`, `kms:RevokeGrant`, `kms:ListGrants`, `kms:ReEncryptFrom`, `kms:ReEncryptTo`
+
+---
 
 ## Module Defaults (infra-modules @ develop)
 
@@ -22,67 +42,108 @@
 | `modules/redis` | `auth_token` | `null` | Optional; transit encryption always on |
 | `modules/redis` | `num_cache_clusters` | `2` | Set to `1` in dev live config |
 | `modules/s3` | `replication_destination_bucket_arn` | `null` | Replication gated on non-null |
-| `modules/secrets-manager` | `recovery_window_in_days` | `0` (dev) / `30` (prod) | ForceDeleteWithoutRecovery for dev |
+| `modules/secrets-manager` | `recovery_window_in_days` | `0` (dev) | ForceDeleteWithoutRecovery for dev |
+| `modules/cloudfront` | `create_oac_policy` | `true` | Boolean — avoids unknown count at plan time |
 
-## KMS Key Policies — Service Principals Added
+---
 
-| Module | Service principal | Actions |
+## ACM Certificate SANs (dns layer)
+
+```hcl
+domain_name               = "medaea.net"
+subject_alternative_names = [
+  "*.medaea.net",        # covers dev.medaea.net, etc.
+  "*.ehr.medaea.net",    # covers dev.ehr.medaea.net
+  "*.api.medaea.net",    # covers dev.api.medaea.net
+]
+```
+
+A single `*.medaea.net` wildcard only covers ONE level — `*.ehr.medaea.net` and `*.api.medaea.net` are required for two-level subdomains.
+
+---
+
+## KMS Key Policies — Service Principals
+
+| Module | Service principal | Reason |
 |---|---|---|
-| `modules/redis` | `elasticache.amazonaws.com` | Decrypt, GenerateDataKey, CreateGrant, DescribeKey, ReEncrypt*, ListGrants |
+| `modules/redis` | `elasticache.amazonaws.com` | ElastiCache needs to decrypt data at rest |
+
+Deploy user needs `kms:CreateGrant` in policy-3 to establish grants for service principals.
+
+---
 
 ## Secrets State — Dev
 
-| Secret name | ARN | Status |
-|---|---|---|
-| `medaea/dev/django-secret-key` | `...:medaea/dev/django-secret-key-VupIOV` | Imported via `import` block |
-| `medaea/dev/jwt-secret` | `...:medaea/dev/jwt-secret-eq0lET` | Imported via `import` block |
-| `medaea/dev/openai-api-key` | `...:medaea/dev/openai-api-key-Rq6RxV` | Imported via `import` block |
-| `medaea/dev/redis-password` | `...:medaea/dev/redis-password-usfqrU` | Imported via `import` block |
-
-## Open PRs — Pending Merge
-
-> Merge infra-modules before infra-live.
-
-### infra-modules (merge to develop)
-| Branch | What it fixes |
+| Secret name | Status |
 |---|---|
-| `feature/MEP-52-checkov-skip-inside-block` | CKV2_AWS_50 skip inside resource block |
-| `feature/MEP-52-rds-kms-secrets-fix` | RDS 16.4; ElastiCache KMS service grant; Secrets recovery=0 |
+| `medaea/dev/django-secret-key` | Imported via `import {}` block |
+| `medaea/dev/jwt-secret` | Imported via `import {}` block |
+| `medaea/dev/openai-api-key` | Imported via `import {}` block |
+| `medaea/dev/redis-password` | Imported via `import {}` block |
 
-### infra-live (merge to develop)
-| Branch | What it fixes |
+---
+
+## Edge Layer — Key Configurations
+
+| Resource | Configuration |
 |---|---|
-| `feature/MEP-52-kms-grant-and-secrets-import` | `kms:CreateGrant` in policy-3; import blocks for 4 dev secrets |
+| Route53 records | `allow_overwrite = true` on all 3 alias records |
+| Compute remote state | `defaults = { alb_dns_name = "", alb_zone_id = "" }` |
+| Platform `aws_account_id` | Replaced with `data.aws_caller_identity.current.account_id` |
+| WAF log group resource policy | `aws_cloudwatch_log_resource_policy` grants `delivery.logs.amazonaws.com` write access |
 
-## Checkov Skips
-
-| Check | Resource | Module | Placement |
-|---|---|---|---|
-| CKV2_AWS_64 | `aws_kms_key.this` | redis, s3, secrets-manager | Line before resource |
-| CKV2_AWS_50 | `aws_elasticache_replication_group.this` | redis | **Inside** resource block |
-
-## RDS PostgreSQL Versions Tried in us-east-1
-
-| Version | Result |
-|---|---|
-| 16.2 | ❌ | 16.1 | ❌ | 15.5 | ❌ | **16.4** | ✅ |
-
-## Known Patterns (Module Authoring)
-
-- **`count` cannot depend on unknown-at-plan-time values** — when `count` uses a resource attribute (e.g., a bucket ID from `module.x.bucket_id`), plan fails with "Invalid count argument". Use a separate boolean variable with a `default` so the count is always determined at plan time.
-- **Required variables without defaults block plan** — use `data "aws_caller_identity"` for account IDs, read other values from remote state, or add defaults. Never leave required variables with no default and no pipeline wiring.
-- **`data.terraform_remote_state` fails hard if state doesn't exist** — add a `defaults` block with zero-value fallbacks so layers can plan even when their dependencies haven't been applied yet.
-- **`for_each` resources produce maps, not lists** — `one()`, `tolist()`, and list-expecting functions will fail on `for_each` resource references. Use `values(resource.this)[0]` to access a single value, or `[for v in values(resource.this) : v.attr]` to build a list.
-
-## Known Patterns
-
-- **KMS + service principal**: Root account statement in key policy covers IAM entities only. Service principals (e.g., `elasticache.amazonaws.com`) need a separate `AllowService` statement. The **deploy user** also needs `kms:CreateGrant` in their IAM policy to create KMS grants for those services.
-- **Secrets Manager after failed apply**: Secrets left in scheduled-deletion state → manual `restore-secret`; restored secrets land outside Terraform state → `import` blocks to adopt them.
-- **Terraform `import` blocks are idempotent** — safe to leave in permanently once resources are in state.
+---
 
 ## Compute Layer Variables
 
 | Variable | Source | Value |
 |---|---|---|
-| `acm_wildcard_cert_arn` | **Removed** — read from `data.terraform_remote_state.dns.outputs.acm_certificate_arn` | Auto-resolved from dns layer state |
-| `alert_email` | GitHub repo variable `vars.ALERT_EMAIL` (fallback: `ops@medaea.net`) | Set `ALERT_EMAIL` in GitHub repo variables to override |
+| `acm_wildcard_cert_arn` | Removed — auto-read from dns remote state | `data.terraform_remote_state.dns.outputs.acm_certificate_arn` |
+| `alert_email` | GitHub repo variable `vars.ALERT_EMAIL` | Fallback default: `ops@medaea.net` |
+
+---
+
+## Checkov Skips
+
+| Check | Resource | Module | Placement rule |
+|---|---|---|---|
+| `CKV2_AWS_64` | `aws_kms_key.this` | redis, s3, secrets-manager | Line before resource block |
+| `CKV2_AWS_50` | `aws_elasticache_replication_group.this` | redis | **Inside** resource block (not line-before) |
+
+---
+
+## Destroy Workflows
+
+| Workflow | File | Trigger |
+|---|---|---|
+| Destroy All (sequential) | `destroy-all.yml` | `workflow_dispatch` — type `destroy-all` to confirm |
+| Destroy Single Layer | `destroy.yml` | `workflow_dispatch` — type `destroy` to confirm |
+
+Destroy order: `platform → edge → secrets → compute → data → network → dns`
+
+---
+
+## RDS PostgreSQL Versions Tried in us-east-1
+
+| Version | Result |
+|---|---|
+| 16.2 | ❌ Not available |
+| 16.1 | ❌ Not available |
+| 15.5 | ❌ Not available |
+| **16.4** | ✅ Working |
+
+---
+
+## Known Patterns
+
+| Pattern | Rule |
+|---|---|
+| `count` at plan time | Never use resource attribute values in `count`. Add a boolean variable with `default = true/false` |
+| Required variables | Use `data.aws_caller_identity` for account IDs; `data.terraform_remote_state` for cross-layer values; always add `default` |
+| Remote state missing | Add `defaults {}` block so layers can plan before dependencies are applied |
+| `for_each` outputs | Use `values(resource.this)[0]` not `one(resource.this)` |
+| Terraform Create + Read | After any `Create*` IAM permission, also add `Describe*/Get*` (Terraform reads state after every create) and `Delete*` (needed for destroy) |
+| KMS service principals | Root key policy covers IAM principals only. Service principals (e.g. `elasticache.amazonaws.com`) need a separate statement AND the deploy user needs `kms:CreateGrant` |
+| WAF log delivery | `delivery.logs.amazonaws.com` needs a CloudWatch log group **resource policy** (not an IAM user policy) |
+| Route53 re-creates | Use `allow_overwrite = true` on alias records to handle records that exist from previous partial applies |
+| Checkov skip placement | `CKV2_AWS_50` requires the comment **inside** the resource block |
