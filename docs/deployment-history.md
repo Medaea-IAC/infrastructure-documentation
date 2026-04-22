@@ -207,3 +207,47 @@ The argument "replication_destination_bucket_arn" is required, but no definition
 |---|---|
 | `null` (default) | Bucket + KMS + versioning + lifecycle only |
 | `arn:aws:s3:::bucket-name` | Full cross-region replication stack |
+
+---
+
+## Phase 9 — Redis Module Dev-Friendly Fix (infra-modules)
+
+**Branch:** `feature/MEP-52-redis-module-dev-friendly` → `develop` on `infra-modules`
+**Status:** Pushed, pending merge
+
+**Error:**
+```
+Error: Missing required argument
+on main.tf line 59, in module "redis_dev"
+The argument "auth_token" is required, but no definition was found.
+```
+
+**Three issues found and fixed in `infra-modules/modules/redis`:**
+
+| Issue | Cause | Fix |
+|---|---|---|
+| `auth_token` required, no default | Variable declared without `default` | Added `default = null`; AWS allows no AUTH inside VPC for dev |
+| `num_cache_clusters` validation `>= 2` | Validation block enforced Multi-AZ minimum | Removed validation; documented constraint in description instead |
+| `automatic_failover_enabled = true` hardcoded | AWS rejects failover with single node: "Cannot enable automatic failover with only 1 node" | Derived from `num_cache_clusters >= 2` via locals |
+| `multi_az_enabled = true` hardcoded | Same — AWS rejects multi-AZ with single node | Same — derived from `num_cache_clusters >= 2` |
+
+**Module locals (new):**
+```hcl
+locals {
+  multi_az_enabled           = var.num_cache_clusters >= 2
+  automatic_failover_enabled = var.num_cache_clusters >= 2
+  transit_encryption_enabled = true  # always on, even without auth_token
+}
+```
+
+**Dev config behaviour (num_cache_clusters = 1, no auth_token):**
+- Single node, no Multi-AZ, no AUTH token
+- Transit encryption still enabled (encrypted in transit inside VPC)
+- At-rest encryption via KMS key
+
+**Prod config behaviour (num_cache_clusters >= 2, auth_token set):**
+- Multi-AZ + automatic failover enabled
+- AUTH token enforced, full transit encryption
+- Full HA configuration
+
+**No change required in infra-live** — dev `data/main.tf` already sets `num_cache_clusters = 1` and omits `auth_token`.
