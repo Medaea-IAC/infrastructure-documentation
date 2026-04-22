@@ -361,3 +361,14 @@ resource "aws_elasticache_replication_group" "this" {
 |---|---|---|
 | `ElastiCache: KMS key access is denied` (persisted after key policy update) | KMS key policy was updated successfully, but the deploy user's IAM policy (policy-3) was missing `kms:CreateGrant` — required for the user to create the KMS grant that lets ElastiCache use the key | Added `CreateGrant`, `RetireGrant`, `RevokeGrant`, `ListGrants`, `GenerateDataKeyWithoutPlaintext`, `ReEncryptFrom`, `ReEncryptTo` to policy-3 → **4050 chars** |
 | `Secrets: ResourceExistsException — secret already exists` | Secrets were restored from scheduled-deletion (manual step) but are now active in AWS without being in Terraform state | Added Terraform `import` blocks for all 4 secrets in `environments/dev/data/main.tf` using their full ARNs |
+
+---
+
+## Phase 16 — Compute Layer Required Variables
+
+**Branch:** `feature/MEP-52-compute-variables-fix` → `develop` on `infra-live`
+
+| Error | Root cause | Fix |
+|---|---|---|
+| `No value for required variable: acm_wildcard_cert_arn` | Variable had no default; pipeline passed no `-var`; cert ARN not wired in | Removed variable. Added `data.terraform_remote_state.dns` to compute/main.tf; `acm_certificate_arn` now reads from `dns` layer output (`dev/dns/terraform.tfstate`) |
+| `No value for required variable: alert_email` | Variable had no default and no pipeline wiring | Added `default = "ops@medaea.net"` to variable. Added `TF_VAR_alert_email: ${{ vars.ALERT_EMAIL \|\| 'ops@medaea.net' }}` to compute plan/apply steps in deploy.yml |

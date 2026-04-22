@@ -72,3 +72,10 @@
 - **KMS + service principal**: Root account statement in key policy covers IAM entities only. Service principals (e.g., `elasticache.amazonaws.com`) need a separate `AllowService` statement. The **deploy user** also needs `kms:CreateGrant` in their IAM policy to create KMS grants for those services.
 - **Secrets Manager after failed apply**: Secrets left in scheduled-deletion state → manual `restore-secret`; restored secrets land outside Terraform state → `import` blocks to adopt them.
 - **Terraform `import` blocks are idempotent** — safe to leave in permanently once resources are in state.
+
+## Compute Layer Variables
+
+| Variable | Source | Value |
+|---|---|---|
+| `acm_wildcard_cert_arn` | **Removed** — read from `data.terraform_remote_state.dns.outputs.acm_certificate_arn` | Auto-resolved from dns layer state |
+| `alert_email` | GitHub repo variable `vars.ALERT_EMAIL` (fallback: `ops@medaea.net`) | Set `ALERT_EMAIL` in GitHub repo variables to override |
