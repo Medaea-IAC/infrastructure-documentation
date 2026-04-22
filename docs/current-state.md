@@ -67,6 +67,10 @@
 |---|---|
 | 16.2 | ❌ | 16.1 | ❌ | 15.5 | ❌ | **16.4** | ✅ |
 
+## Known Patterns (Module Authoring)
+
+- **`for_each` resources produce maps, not lists** — `one()`, `tolist()`, and list-expecting functions will fail on `for_each` resource references. Use `values(resource.this)[0]` to access a single value, or `[for v in values(resource.this) : v.attr]` to build a list.
+
 ## Known Patterns
 
 - **KMS + service principal**: Root account statement in key policy covers IAM entities only. Service principals (e.g., `elasticache.amazonaws.com`) need a separate `AllowService` statement. The **deploy user** also needs `kms:CreateGrant` in their IAM policy to create KMS grants for those services.

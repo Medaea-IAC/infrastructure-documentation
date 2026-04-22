@@ -372,3 +372,13 @@ resource "aws_elasticache_replication_group" "this" {
 |---|---|---|
 | `No value for required variable: acm_wildcard_cert_arn` | Variable had no default; pipeline passed no `-var`; cert ARN not wired in | Removed variable. Added `data.terraform_remote_state.dns` to compute/main.tf; `acm_certificate_arn` now reads from `dns` layer output (`dev/dns/terraform.tfstate`) |
 | `No value for required variable: alert_email` | Variable had no default and no pipeline wiring | Added `default = "ops@medaea.net"` to variable. Added `TF_VAR_alert_email: ${{ vars.ALERT_EMAIL \|\| 'ops@medaea.net' }}` to compute plan/apply steps in deploy.yml |
+
+---
+
+## Phase 17 — ECR registry_id Output Type Mismatch
+
+**Branch:** `feature/MEP-52-ecr-registry-id-output-fix` → `develop` on `infra-modules`
+
+| Error | Root cause | Fix |
+|---|---|---|
+| `Invalid function argument: one(list) — must be a list, set, or tuple with zero or one elements` | `aws_ecr_repository.this` uses `for_each`, making it a **map** (object). `one()` only accepts list/set/tuple. The for-expression iterates the map but still produces a multi-element list (one per repo) | Replaced with `values(aws_ecr_repository.this)[0].registry_id` — all repos share the same `registry_id` (AWS account ID). Null-guarded for the empty-set case |
