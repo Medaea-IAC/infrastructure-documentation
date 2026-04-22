@@ -297,3 +297,13 @@ Policy-3 size: **3840 chars** (under 6144 limit).
 **RDS module** (`modules/rds/variables.tf`): `default = "16.1"` (was `"16.2"`). PostgreSQL 16.2 does not exist in us-east-1.
 
 No changes required in infra-live for either module fix.
+
+---
+
+## Phase 11 — ElastiCache Replication, SecretsManager Resource Policy, RDS Version
+
+| Error | Resource | Branch | Fix |
+|---|---|---|---|
+| `elasticache:CreateReplicationGroup` AccessDenied | policy-2 `RDSAndElastiCache` | `feature/MEP-52-patch-elasticache-secretsmanager` (infra-live) | Added 11 ReplicationGroup + snapshot actions |
+| `secretsmanager:GetResourcePolicy` AccessDenied | policy-2 `SecretsAndSSM` | same | Added 7 resource-policy + rotation actions; policy-2 → **5585 chars** |
+| `Cannot find version 16.1 for postgres` | `modules/rds/variables.tf` | `feature/MEP-52-rds-version-15-5` (infra-modules) | `engine_version` default: `16.2` → `16.1` → **`15.5`** (16.x series absent in us-east-1) |
