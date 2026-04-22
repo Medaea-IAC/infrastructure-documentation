@@ -382,3 +382,16 @@ resource "aws_elasticache_replication_group" "this" {
 | Error | Root cause | Fix |
 |---|---|---|
 | `Invalid function argument: one(list) — must be a list, set, or tuple with zero or one elements` | `aws_ecr_repository.this` uses `for_each`, making it a **map** (object). `one()` only accepts list/set/tuple. The for-expression iterates the map but still produces a multi-element list (one per repo) | Replaced with `values(aws_ecr_repository.this)[0].registry_id` — all repos share the same `registry_id` (AWS account ID). Null-guarded for the empty-set case |
+
+---
+
+## Phase 18 — Edge + Platform Layer Fixes (3 errors)
+
+**infra-modules branch:** `feature/MEP-52-cloudfront-oac-count-fix`
+**infra-live branch:** `feature/MEP-52-platform-account-id-edge-defaults`
+
+| Layer | Error | Root cause | Fix |
+|---|---|---|---|
+| edge | `Invalid count argument` on `data.aws_iam_policy_document.cf_oac` and `aws_s3_bucket_policy.cf_oac` | `count = var.s3_bucket_id != "" ? 1 : 0` — callers pass `module.website_s3.bucket_id` which is unknown at plan time | Added `create_oac_policy` bool variable (`default = true`) to CloudFront module; count now always deterministic |
+| edge | `Unable to find remote state` for compute | Compute state file doesn't exist on first run or when compute failed | Added `defaults = { alb_dns_name = "", alb_zone_id = "" }` to `data.terraform_remote_state.compute` — graceful fallback instead of hard error |
+| platform | `No value for required variable: aws_account_id` | Variable had no default; only used to build SSM ARNs | Removed variable; replaced with `data "aws_caller_identity" "current"` — self-resolves from AWS credentials |

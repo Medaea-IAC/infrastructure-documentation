@@ -69,6 +69,9 @@
 
 ## Known Patterns (Module Authoring)
 
+- **`count` cannot depend on unknown-at-plan-time values** — when `count` uses a resource attribute (e.g., a bucket ID from `module.x.bucket_id`), plan fails with "Invalid count argument". Use a separate boolean variable with a `default` so the count is always determined at plan time.
+- **Required variables without defaults block plan** — use `data "aws_caller_identity"` for account IDs, read other values from remote state, or add defaults. Never leave required variables with no default and no pipeline wiring.
+- **`data.terraform_remote_state` fails hard if state doesn't exist** — add a `defaults` block with zero-value fallbacks so layers can plan even when their dependencies haven't been applied yet.
 - **`for_each` resources produce maps, not lists** — `one()`, `tolist()`, and list-expecting functions will fail on `for_each` resource references. Use `values(resource.this)[0]` to access a single value, or `[for v in values(resource.this) : v.attr]` to build a list.
 
 ## Known Patterns
