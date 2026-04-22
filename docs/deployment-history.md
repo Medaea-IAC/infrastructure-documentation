@@ -395,3 +395,17 @@ resource "aws_elasticache_replication_group" "this" {
 | edge | `Invalid count argument` on `data.aws_iam_policy_document.cf_oac` and `aws_s3_bucket_policy.cf_oac` | `count = var.s3_bucket_id != "" ? 1 : 0` — callers pass `module.website_s3.bucket_id` which is unknown at plan time | Added `create_oac_policy` bool variable (`default = true`) to CloudFront module; count now always deterministic |
 | edge | `Unable to find remote state` for compute | Compute state file doesn't exist on first run or when compute failed | Added `defaults = { alb_dns_name = "", alb_zone_id = "" }` to `data.terraform_remote_state.compute` — graceful fallback instead of hard error |
 | platform | `No value for required variable: aws_account_id` | Variable had no default; only used to build SSM ARNs | Removed variable; replaced with `data "aws_caller_identity" "current"` — self-resolves from AWS credentials |
+
+---
+
+## Phase 19 — IAM permissions: ALB + SNS + CloudWatch (compute layer)
+
+**infra-live branch:** `feature/MEP-52-iam-alb-sns-cw-permissions`
+
+| Error | Permission | Policy | Statement |
+|---|---|---|---|
+| ELBv2 CreateLoadBalancer AccessDenied | `ec2:GetSecurityGroupsForVpc` | policy-1 | VPCAndNetworking |
+| SNS GetSubscriptionAttributes AuthorizationError | `sns:GetSubscriptionAttributes` | policy-3 | CloudWatchAndLogs |
+| CloudWatch ListTagsForResource AccessDenied | `cloudwatch:ListTagsForResource` | policy-3 | CloudWatchAndLogs |
+
+Policy sizes after: policy-1=5027, policy-3=4134 (limit 6144 each)
