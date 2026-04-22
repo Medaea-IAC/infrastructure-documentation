@@ -251,3 +251,49 @@ locals {
 - Full HA configuration
 
 **No change required in infra-live** — dev `data/main.tf` already sets `num_cache_clusters = 1` and omits `auth_token`.
+
+---
+
+## Phase 10 — Four-way Apply Fix (infra-live + infra-modules)
+
+**Status:** Two branches pushed, pending merge
+
+### Errors and fixes
+
+| Error | Repo | Branch | Fix |
+|---|---|---|---|
+| `kms:TagResource` AccessDenied (S3, Redis, Secrets Manager KMS keys) | infra-live | `feature/MEP-52-patch-kms-and-elasticache-iam` | Added 15 KMS lifecycle actions to policy-3 |
+| ElastiCache `ServiceLinkedRoleNotFoundFault` | infra-live | same | Added `iam:CreateServiceLinkedRole` to policy-3 |
+| S3 lifecycle rule `[rule[0].filter,rule[0].prefix] is required` | infra-modules | `feature/MEP-52-module-fixes-batch1` | Added `filter {}` to dynamic rule content block |
+| RDS `Cannot find version 16.2 for postgres` | infra-modules | same | Changed default `engine_version` from `16.2` → `16.1` |
+
+### policy-3 changes (infra-live)
+
+**KMSForEncryption statement** — was read-only decrypt. Now includes full key lifecycle:
+```
+kms:CreateKey, kms:TagResource, kms:UntagResource
+kms:PutKeyPolicy, kms:GetKeyPolicy
+kms:EnableKeyRotation, kms:DisableKeyRotation, kms:GetKeyRotationStatus
+kms:ScheduleKeyDeletion, kms:CancelKeyDeletion
+kms:CreateAlias, kms:DeleteAlias, kms:UpdateAlias
+kms:ListKeys, kms:ListResourceTags
+```
+
+**IAMForECSAndCodeDeploy statement** — added service-linked role management:
+```
+iam:CreateServiceLinkedRole
+iam:DeleteServiceLinkedRole
+iam:GetServiceLinkedRoleDeletionStatus
+```
+Required because AWS auto-creates `AWSServiceRoleForElastiCache` on first
+ElastiCache use in the account via `iam:CreateServiceLinkedRole`.
+
+Policy-3 size: **3840 chars** (under 6144 limit).
+
+### Module changes (infra-modules)
+
+**S3 module** (`modules/s3/main.tf`): Added `filter {}` inside the dynamic lifecycle rule content block. AWS provider requires one of `[filter, prefix]` on each rule. Empty `filter {}` = apply to all objects.
+
+**RDS module** (`modules/rds/variables.tf`): `default = "16.1"` (was `"16.2"`). PostgreSQL 16.2 does not exist in us-east-1.
+
+No changes required in infra-live for either module fix.
