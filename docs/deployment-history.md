@@ -143,3 +143,33 @@ safety-gate → ensure-iam → ensure-backend → [all layers]
 1. Merge `feature/MEP-52-split-iam-policy` → `develop`
 2. Run the one-time CloudShell command (see [Manual Steps](manual-steps.md))
 3. Re-run the "Deploy Infrastructure" workflow — all layers should succeed
+
+---
+
+## Phase 7 — EC2 Describe Permissions Patch — PR (pending)
+
+**Branch:** `feature/MEP-52-patch-ec2-describe-permissions` → `develop`
+**Status:** Pushed, pending merge
+
+**DNS layer:** Passed successfully.
+
+**Network layer errors:**
+
+| Error | Action Missing | Triggered By |
+|---|---|---|
+| `UnauthorizedOperation` | `ec2:DescribeVpcAttribute` | Terraform waiter after `aws_vpc` creation checks DNS hostname attribute |
+| `UnauthorizedOperation` | `ec2:DescribeAddressesAttribute` | Terraform reads back EIP domain name attribute after `aws_eip` creation |
+
+**Fix:** Added 5 actions to the `VPCAndNetworking` statement in `github-deploy-policy-1.json`:
+
+| Action Added | Reason |
+|---|---|
+| `ec2:DescribeVpcAttribute` | Required by CreateVpc waiter |
+| `ec2:DescribeAddressesAttribute` | Required by EIP read-back |
+| `ec2:DescribePrefixLists` | Security group rules that reference prefix lists |
+| `ec2:DescribeVpcClassicLink` | Terraform VPC module compatibility checks |
+| `ec2:DescribeFlowLogs` | Terraform state read for VPC flow log resources |
+
+**Policy-1 size:** 4,804 → 4,987 chars (still under 6,144 limit).
+
+**Pattern:** AWS Terraform provider frequently reads back resource attributes after creation using `Describe*` API calls that are separate from the write permission. All EC2 `Describe*` actions needed by the VPC module are now covered.
