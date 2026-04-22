@@ -336,3 +336,17 @@ To:
 resource "aws_elasticache_replication_group" "this" {
   #checkov:skip=CKV2_AWS_50:...
 ```
+
+---
+
+## Phase 14 — RDS Version, ElastiCache KMS Grant, Secrets Recovery Window
+
+**Branch:** `feature/MEP-52-rds-kms-secrets-fix` → `develop` on `infra-modules`
+
+| Error | Module | Fix |
+|---|---|---|
+| `Cannot find version 15.5 for postgres` | `modules/rds` | `engine_version` default → `"16.4"` (16.1, 16.2, 15.5 all absent in us-east-1) |
+| `ElastiCache: KMS key access is denied` | `modules/redis` | Added `AllowElastiCacheService` statement to KMS key policy for `elasticache.amazonaws.com` |
+| Secrets `scheduled for deletion` — can't recreate | `modules/secrets-manager` | `recovery_window_in_days` → `0` for non-prod (ForceDeleteWithoutRecovery) — prevents recurrence |
+
+**Secrets manual step required** — see `docs/manual-steps.md` for one-time CloudShell restore commands.

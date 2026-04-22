@@ -73,3 +73,30 @@ Once the above steps are done:
 - CodeDeploy application/deployment group creation — automatic
 - Terraform state management — automatic (S3 bucket created by ensure-backend)
 - IAM managed policy creation and attachment — automatic (after Step 1 above)
+
+---
+
+## One-time: Restore Secrets Manager Secrets Scheduled for Deletion
+
+**When:** After a partial Terraform apply creates secrets, then fails, leaving them
+in scheduled-deletion state. Symptom: `You can't create this secret because a secret
+with this name is already scheduled for deletion.`
+
+**Run in AWS CloudShell (account 009952409575, region us-east-1):**
+
+```bash
+for secret in django-secret-key openai-api-key jwt-secret redis-password; do
+  aws secretsmanager restore-secret \
+    --secret-id "medaea/dev/${secret}" \
+    --region us-east-1 \
+    && echo "Restored: medaea/dev/${secret}" \
+    || echo "Not scheduled / already active: medaea/dev/${secret}"
+done
+```
+
+**After restoring:** re-run the pipeline. Terraform will import/adopt the existing secrets
+rather than recreating them (assuming they are already in state, or run `terraform import`
+if not).
+
+**Going forward:** `recovery_window_in_days = 0` is now set for dev in the secrets module,
+so future `terraform destroy` calls will force-delete immediately without the recovery window.
