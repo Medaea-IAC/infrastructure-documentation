@@ -173,3 +173,37 @@ safety-gate → ensure-iam → ensure-backend → [all layers]
 **Policy-1 size:** 4,804 → 4,987 chars (still under 6,144 limit).
 
 **Pattern:** AWS Terraform provider frequently reads back resource attributes after creation using `Describe*` API calls that are separate from the write permission. All EC2 `Describe*` actions needed by the VPC module are now covered.
+
+---
+
+## Phase 8 — S3 Module Replication Fix (infra-modules)
+
+**Branch:** `feature/MEP-52-optional-s3-replication` → `develop` on `infra-modules`
+**Status:** Pushed, pending merge
+
+**Error:**
+```
+Error: Missing required argument
+on main.tf line 89, in module "media_s3_dev"
+The argument "replication_destination_bucket_arn" is required, but no definition was found.
+```
+
+**Root cause:** The `s3` module in `infra-modules` declared `replication_destination_bucket_arn` as a required variable with no default. Cross-region replication is not needed in dev, so the live config correctly omitted it — but the module enforced it unconditionally.
+
+**Fix in `infra-modules/modules/s3`:**
+
+- `variables.tf`: Added `default = null` to `replication_destination_bucket_arn`
+- `main.tf`: Gated all 4 replication resources with `count = var.replication_destination_bucket_arn != null ? 1 : 0`
+  - `aws_iam_role.replication`
+  - `aws_iam_policy.replication`
+  - `aws_iam_role_policy_attachment.replication`
+  - `aws_s3_bucket_replication_configuration.this`
+
+**No change required in infra-live** — the `media_s3_dev` module call already omits the argument and now correctly uses the null default, creating a plain encrypted + versioned bucket with no replication.
+
+**Behaviour after fix:**
+
+| `replication_destination_bucket_arn` | Resources created |
+|---|---|
+| `null` (default) | Bucket + KMS + versioning + lifecycle only |
+| `arn:aws:s3:::bucket-name` | Full cross-region replication stack |
