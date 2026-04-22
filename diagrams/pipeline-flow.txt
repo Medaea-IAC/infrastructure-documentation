@@ -1,0 +1,108 @@
+MEDAEA INFRASTRUCTURE PIPELINE — FULL FLOW
+==========================================
+
+GitHub Push/Dispatch
+        │
+        ▼
+┌───────────────────┐
+│   safety-gate     │ Blocks prod pushes
+└────────┬──────────┘
+         │
+         ▼
+┌───────────────────────────────────────────────────────────────┐
+│                        ensure-iam                             │
+│                                                               │
+│  Uses: AWS_ACCESS_KEY_ID (deploy user — no admin creds)       │
+│                                                               │
+│  upsert_policy(MedaeaGitHubDeployPolicy-1)                    │
+│    → S3, Route53, ACM, CloudFront, WAFv2, VPC/EC2             │
+│  upsert_policy(MedaeaGitHubDeployPolicy-2)                    │
+│    → ELB, ECS, ECR, RDS, ElastiCache, Secrets, SSM           │
+│  upsert_policy(MedaeaGitHubDeployPolicy-3)                    │
+│    → CloudWatch, Logs, SNS, IAM, CodeDeploy, KMS             │
+│                                                               │
+│  Each: create-or-update + attach (idempotent)                 │
+└────────┬──────────────────────────────────────────────────────┘
+         │
+         ▼
+┌───────────────────┐
+│  ensure-backend   │ Creates S3 state bucket if missing
+└────────┬──────────┘
+         │
+    ┌────┴─────────────────────────────────────────┐
+    │                                              │
+    ▼                                              ▼
+┌────────┐                                  ┌──────────┐
+│  dns   │ ACM wildcard *.medaea.net         │ network  │ VPC+subnets+SGs
+└───┬────┘                                  └────┬─────┘
+    │                                            │
+    │                                       ┌────▼──────────────────┐
+    │                                       │  data                 │
+    │                                       │  RDS + ElastiCache    │
+    │                                       └────┬──────────────────┘
+    │                                            │
+    │                               ┌────────────┴──────────────┐
+    │                               │                           │
+    │                         ┌─────▼─────┐             ┌──────▼───┐
+    │                         │  secrets  │             │ compute  │
+    │                         │ SSM params│             │ ECS+ALB  │
+    │                         └─────┬─────┘             └────┬─────┘
+    │                               │                        │
+    │                               │                ┌───────▼───────┐
+    │                               └───────────────►│   platform    │
+    │                                                │ ECS services  │
+    │                                                │ + CodeDeploy  │
+    │                                                └───────────────┘
+    │                                                        │
+    └────────────────────────────────┐                       │
+                                     ▼                       │
+                               ┌──────────┐                  │
+                               │   edge   │◄─────────────────┘
+                               │CloudFront│
+                               │ WAF+DNS  │
+                               └──────────┘
+
+
+AWS RESOURCE LAYOUT
+===================
+
+                    ┌─────────────────────────────────────┐
+                    │           Route53 (medaea.net)       │
+                    └────────┬────────────┬───────────────┘
+                             │            │
+              ┌──────────────▼──┐    ┌────▼──────────────────┐
+              │  CloudFront #1  │    │   CloudFront #2 & #3   │
+              │ dev.medaea.net  │    │ dev.ehr / dev.api      │
+              └──────────┬──────┘    └───────┬────────────────┘
+                         │                   │
+                    ┌────▼────┐         ┌────▼────┐
+                    │   S3    │         │   ALB   │
+                    │ website │         │         │
+                    └─────────┘         └────┬────┘
+                                             │
+                                    ┌────────▼────────┐
+                                    │   ECS Fargate   │
+                                    │  cluster:        │
+                                    │  medaea-dev      │
+                                    └────────┬────────┘
+                                             │
+                        ┌────────────────────┼──────────────┐
+                        │                    │              │
+                   ┌────▼────┐         ┌─────▼────┐  ┌─────▼────┐
+                   │   RDS   │         │  Redis   │  │   SSM    │
+                   │ Postgres│         │(ElastiC) │  │ /dev/*   │
+                   └─────────┘         └──────────┘  └──────────┘
+
+
+GITHUB SECRETS REQUIRED
+========================
+
+┌─────────────────────────────┬──────────────────────────────────────────┐
+│ Secret                      │ Purpose                                  │
+├─────────────────────────────┼──────────────────────────────────────────┤
+│ AWS_ACCESS_KEY_ID           │ github-deploy-user-medaea-01 access key  │
+│ AWS_SECRET_ACCESS_KEY       │ github-deploy-user-medaea-01 secret      │
+│ GH_TOKEN                    │ PAT for private infra-modules access      │
+└─────────────────────────────┴──────────────────────────────────────────┘
+
+NO ADMIN CREDENTIALS IN PIPELINE — self-managed IAM via MedaeaSelfServiceBootstrap inline policy.
