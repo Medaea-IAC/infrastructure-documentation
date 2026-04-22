@@ -307,3 +307,13 @@ No changes required in infra-live for either module fix.
 | `elasticache:CreateReplicationGroup` AccessDenied | policy-2 `RDSAndElastiCache` | `feature/MEP-52-patch-elasticache-secretsmanager` (infra-live) | Added 11 ReplicationGroup + snapshot actions |
 | `secretsmanager:GetResourcePolicy` AccessDenied | policy-2 `SecretsAndSSM` | same | Added 7 resource-policy + rotation actions; policy-2 → **5585 chars** |
 | `Cannot find version 16.1 for postgres` | `modules/rds/variables.tf` | `feature/MEP-52-rds-version-15-5` (infra-modules) | `engine_version` default: `16.2` → `16.1` → **`15.5`** (16.x series absent in us-east-1) |
+
+---
+
+## Phase 12 — Checkov CKV2_AWS_50 Redis Failover Skip
+
+| Check | Resource | Branch | Fix |
+|---|---|---|---|
+| `CKV2_AWS_50` — Multi-AZ automatic failover must be enabled | `aws_elasticache_replication_group.this` | `feature/MEP-52-checkov-redis-failover-skip` (infra-modules) | Added `#checkov:skip=CKV2_AWS_50` with justification comment |
+
+**Why skip, not fix:** AWS rejects `automatic_failover_enabled=true` with a single node. The module already enforces failover for multi-node clusters via `locals { automatic_failover_enabled = var.num_cache_clusters >= 2 }`. Unconditionally setting `true` would break dev; the skip acknowledges the check and documents the conditional logic.
