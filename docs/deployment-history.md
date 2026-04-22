@@ -350,3 +350,14 @@ resource "aws_elasticache_replication_group" "this" {
 | Secrets `scheduled for deletion` — can't recreate | `modules/secrets-manager` | `recovery_window_in_days` → `0` for non-prod (ForceDeleteWithoutRecovery) — prevents recurrence |
 
 **Secrets manual step required** — see `docs/manual-steps.md` for one-time CloudShell restore commands.
+
+---
+
+## Phase 15 — KMS CreateGrant + Secrets State Import
+
+**Branch:** `feature/MEP-52-kms-grant-and-secrets-import` → `develop` on `infra-live`
+
+| Error | Root cause | Fix |
+|---|---|---|
+| `ElastiCache: KMS key access is denied` (persisted after key policy update) | KMS key policy was updated successfully, but the deploy user's IAM policy (policy-3) was missing `kms:CreateGrant` — required for the user to create the KMS grant that lets ElastiCache use the key | Added `CreateGrant`, `RetireGrant`, `RevokeGrant`, `ListGrants`, `GenerateDataKeyWithoutPlaintext`, `ReEncryptFrom`, `ReEncryptTo` to policy-3 → **4050 chars** |
+| `Secrets: ResourceExistsException — secret already exists` | Secrets were restored from scheduled-deletion (manual step) but are now active in AWS without being in Terraform state | Added Terraform `import` blocks for all 4 secrets in `environments/dev/data/main.tf` using their full ARNs |
