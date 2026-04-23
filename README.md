@@ -16,6 +16,8 @@
 | [IAM Reference](docs/iam.md) | IAM user, policies, self-service bootstrap |
 | [Troubleshooting](docs/troubleshooting.md) | Common errors and fixes |
 | [Current State](docs/current-state.md) | Live environment status and known issues |
+| [Security & ONC Compliance](docs/security.md) | HIPAA, ONC §170.315, cybersecurity controls, breach response |
+| [Cost Analysis](docs/cost-analysis.md) | Monthly cost breakdown, production estimates, optimization |
 
 ---
 
