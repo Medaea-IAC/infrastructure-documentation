@@ -1,166 +1,239 @@
 # Deploy Guide
 
-> Step-by-step instructions for deploying the Medaea infrastructure from a clean AWS account to fully live.
+> Step-by-step instructions for deploying Medaea infrastructure — from a clean AWS account to fully live.
 
 ---
 
-## Prerequisites
+## Prerequisites (One-time Setup)
 
-Before running the pipeline for the first time, complete these one-time manual steps.
+### 1. AWS — Bootstrap IAM user
 
-### 1. AWS — Create the deploy IAM user
+Run once in AWS CloudShell or locally with admin credentials:
 
 ```bash
+# Create the deploy user
 aws iam create-user --user-name github-deploy-user-medaea-01
 
-# Create and download access keys
+# Create access keys and save them — you'll add these to GitHub Secrets
 aws iam create-access-key --user-name github-deploy-user-medaea-01
-# ↑ Save AccessKeyId and SecretAccessKey — you'll need them for GitHub secrets
-```
 
-### 2. AWS — Attach the self-service bootstrap policy
-
-The pipeline manages its own IAM policies (creates and updates them). For this to work, the deploy user needs a small inline policy that allows it to manage only the three `MedaeaGitHubDeployPolicy-*` policies.
-
-```bash
+# Apply the self-service bootstrap inline policy (lets the user manage its own policies)
 aws iam put-user-policy \
   --user-name github-deploy-user-medaea-01 \
   --policy-name MedaeaSelfServiceBootstrap \
-  --policy-document '{
-    "Version": "2012-10-17",
-    "Statement": [{
-      "Effect": "Allow",
-      "Action": [
-        "iam:CreatePolicy",
-        "iam:CreatePolicyVersion",
-        "iam:DeletePolicyVersion",
-        "iam:GetPolicy",
-        "iam:GetPolicyVersion",
-        "iam:ListPolicyVersions",
-        "iam:AttachUserPolicy",
-        "iam:DetachUserPolicy",
-        "iam:ListAttachedUserPolicies"
-      ],
-      "Resource": "arn:aws:iam::009952409575:policy/MedaeaGitHubDeployPolicy-*"
-    }]
-  }'
+  --policy-document file://iam/self-service-bootstrap-policy.json
 ```
 
-### 3. AWS — Create the Route53 hosted zone
+See `iam/BOOTSTRAP.md` for the full inline policy content.
 
-The `medaea.net` hosted zone must exist before any Terraform runs (the `dns` layer validates against it).
+### 2. GitHub — Add repository secrets
 
-```bash
-aws route53 create-hosted-zone \
-  --name medaea.net \
-  --caller-reference medaea-$(date +%s)
-# Note the hosted zone ID from the output (format: Z0392791162ZTG8WYEICP)
-```
+Go to **Settings → Secrets and variables → Actions** in the `Medaea-IAC/infra-live` repo and add:
 
-Update your domain registrar's nameservers to the four NS records Route53 gives you.
-
-### 4. GitHub — Add repository secrets
-
-In `Medaea-IAC/infra-live` → Settings → Secrets and variables → Actions:
-
-| Secret name | Value |
+| Secret | Value |
 |---|---|
-| `AWS_ACCESS_KEY_ID` | Access key from step 1 |
-| `AWS_SECRET_ACCESS_KEY` | Secret key from step 1 |
-| `GH_TOKEN` | GitHub PAT with `repo` scope (for reading private infra-modules) |
+| `AWS_ACCESS_KEY_ID` | From step 1 access key output |
+| `AWS_SECRET_ACCESS_KEY` | From step 1 access key output |
+| `GH_TOKEN` | GitHub PAT with `repo` scope (for cloning infra-modules) |
 
-### 5. GitHub — Add repository variables (optional)
+### 3. (Optional) Create S3 state bucket manually
 
-| Variable name | Default if not set | Purpose |
-|---|---|---|
-| `ALERT_EMAIL` | `ops@medaea.net` | Email address for CloudWatch alarm SNS notifications |
-
----
-
-## First Deploy — From Scratch
-
-Once prerequisites are complete, push any change to the `develop` branch (or trigger manually via `workflow_dispatch`).
-
-The pipeline runs all layers automatically in dependency order:
-
-```
-push to develop
-      │
-      ▼
- safety-gate ──► ensure-iam ──► ensure-backend
-                                      │
-                          ┌───────────┴───────────┐
-                          ▼                       ▼
-                         dns                   network
-                          │                       │
-                          │                  ┌────┴────┐
-                          │                  ▼         ▼
-                          │                data     (data)
-                          │                  │         │
-                          │             secrets    compute
-                          │                           │
-                          └──────────┬────────────────┘
-                                     ▼
-                              ┌──────┴──────┐
-                              ▼             ▼
-                             edge        platform
-```
-
-**Expected total time for a clean first deploy: 25–40 minutes.**
-Most of that is RDS (~10 min to create) and CloudFront (~5–10 min to propagate).
-
----
-
-## Triggering a Deploy Manually
-
-Go to: **GitHub → `Medaea-IAC/infra-live` → Actions → Deploy Infrastructure → Run workflow**
-
-| Input | Options | Default | Notes |
-|---|---|---|---|
-| `environment` | `dev`, `staging`, `prod` | `dev` | `prod` requires `workflow_dispatch` — push is blocked |
-| `plan_only` | `true` / `false` | `false` | Set to `true` to preview changes without applying |
-| `deploy_dns` | `true` / `false` | `false` | Force-run the dns layer even without changes |
-| `deploy_network` | `true` / `false` | `false` | Force-run the network layer |
-| `deploy_data` | `true` / `false` | `false` | Force-run the data layer |
-| `deploy_compute` | `true` / `false` | `false` | Force-run the compute layer |
-| `deploy_edge` | `true` / `false` | `false` | Force-run the edge layer |
-| `deploy_platform` | `true` / `false` | `false` | Force-run the platform layer |
-
-On a normal `push` to `develop`, all layers run automatically — the individual flags are only needed for manual targeted re-runs.
-
----
-
-## Re-Deploying After IAM Policy Changes
-
-When a policy JSON file (`iam/github-deploy-policy-*.json`) is updated on a branch:
-
-1. Merge the branch into `develop`
-2. The next pipeline run will call `ensure-iam` which automatically creates a new policy version and sets it as default
-3. Old policy versions are pruned automatically (AWS allows max 5 versions)
-
-**You do not need to manually apply policy changes** — the `ensure-iam` job handles it on every run.
-
----
-
-## Re-Running a Single Failed Layer
-
-If one layer fails and you want to re-run just that layer without re-running everything:
-
-1. Go to **Actions → Deploy Infrastructure → Run workflow**
-2. Set `plan_only = false`
-3. Set **only** the failed layer's flag to `true` (e.g. `deploy_compute = true`)
-4. All other layer flags stay `false`
-
-This skips unchanged layers and only applies the one you need.
-
----
-
-## Verifying a Successful Deploy
-
-After all jobs turn green, verify end-to-end:
+The pipeline creates this automatically. Skip this step unless you need it ahead of time:
 
 ```bash
-# DNS resolves correctly
+aws s3api create-bucket \
+  --bucket medaea-dev-terraform-state \
+  --region us-east-1
+
+aws s3api put-bucket-versioning \
+  --bucket medaea-dev-terraform-state \
+  --versioning-configuration Status=Enabled
+```
+
+---
+
+## Day-to-Day Workflow
+
+### What happens when you push to `develop`
+
+Every push to `develop` **only runs terraform plan** — never apply. The `plan.yml` workflow:
+
+1. Detects which layer files changed (e.g. `environments/dev/compute/**`)
+2. Runs `terraform plan` only for those layers
+3. Reports pass/fail per layer in the Actions UI
+
+No infrastructure is created or changed by a push. This is intentional.
+
+### How to actually deploy
+
+Go to **Actions → Apply Infrastructure → Run workflow**:
+
+```
+Environment:  dev        ← always dev unless staging/prod is ready
+Target:       all        ← "all" for a full deploy, or pick a specific layer
+Plan only:    false      ← set true to preview first
+```
+
+Click **Run workflow**.
+
+---
+
+## Full Deploy — Clean Account (First Time)
+
+Run these steps in order. Each `Apply Infrastructure` run is a manual trigger.
+
+### Step 1 — Apply dns (ACM certificate)
+
+ACM certificate validation can take 5–30 minutes. This must complete before edge.
+
+```
+Target: dns
+```
+
+Wait for the certificate to reach `Issued` status in ACM before proceeding.
+
+```bash
+aws acm list-certificates --region us-east-1 \
+  --query 'CertificateSummaryList[*].{Domain:DomainName,Status:Status}'
+```
+
+### Step 2 — Apply network (VPC + subnets + NAT)
+
+```
+Target: network
+```
+
+Verify after:
+
+```bash
+aws ec2 describe-vpcs \
+  --filters "Name=tag:Name,Values=medaea-dev-vpc" \
+  --query 'Vpcs[].{VpcId:VpcId,CIDR:CidrBlock,State:State}'
+```
+
+### Step 3 — Apply data (RDS + ElastiCache + KMS)
+
+RDS PostgreSQL provisioning takes 5–15 minutes.
+
+```
+Target: data
+```
+
+Verify RDS is available:
+
+```bash
+aws rds describe-db-instances \
+  --query 'DBInstances[*].{ID:DBInstanceIdentifier,Status:DBInstanceStatus,Engine:EngineVersion}'
+```
+
+### Step 4 — Apply secrets (Secrets Manager / SSM)
+
+Populates `/dev/db-host`, `/dev/redis-url`, and other SSM parameters that ECS tasks read at startup.
+
+```
+Target: secrets
+```
+
+### Step 5 — Apply compute (ECS cluster + ALB + ECR)
+
+Creates the ECS cluster (`medaea-dev`), Application Load Balancer, ECR repositories, and CloudWatch log groups.
+
+```
+Target: compute
+```
+
+Verify ALB is active:
+
+```bash
+aws elbv2 describe-load-balancers \
+  --query 'LoadBalancers[*].{Name:LoadBalancerName,State:State.Code,DNS:DNSName}'
+```
+
+### Step 6 — Apply edge (CloudFront + WAF + Route53)
+
+Depends on both `dns` (ACM cert must be Issued) and `compute` (ALB DNS needed as origin).
+CloudFront distribution deployment takes 5–15 minutes.
+
+```
+Target: edge
+```
+
+Verify distributions are deployed:
+
+```bash
+aws cloudfront list-distributions \
+  --query 'DistributionList.Items[*].{Domain:DomainName,Status:Status,Origins:Origins.Items[0].DomainName}'
+```
+
+### Step 7 — Apply platform (ECS services + CodeDeploy)
+
+Push Docker images to ECR **before** running this step, or ECS tasks will fail to start.
+
+```bash
+# Login to ECR
+aws ecr get-login-password --region us-east-1 | \
+  docker login --username AWS --password-stdin \
+  009952409575.dkr.ecr.us-east-1.amazonaws.com
+
+# Push API image
+docker build -t medaea-api ./api
+docker tag medaea-api:latest \
+  009952409575.dkr.ecr.us-east-1.amazonaws.com/medaea-dev/api:latest
+docker push 009952409575.dkr.ecr.us-east-1.amazonaws.com/medaea-dev/api:latest
+
+# Push frontend image (if applicable)
+docker build -t medaea-frontend ./frontend
+docker tag medaea-frontend:latest \
+  009952409575.dkr.ecr.us-east-1.amazonaws.com/medaea-dev/frontend:latest
+docker push 009952409575.dkr.ecr.us-east-1.amazonaws.com/medaea-dev/frontend:latest
+```
+
+Then trigger:
+
+```
+Target: platform
+```
+
+---
+
+## Partial Deploy — Single Layer
+
+Use this when only one layer changed and you don't need to re-run everything.
+
+**Example: compute layer changed (new ECS task definition)**
+
+```
+Actions → Apply Infrastructure → Run workflow
+  Environment: dev
+  Target:      compute
+  Plan only:   false
+```
+
+Only the `compute` job runs. All other layers are skipped. `ensure-iam` and `ensure-backend` still run first (they are always part of every apply).
+
+---
+
+## Preview Before Applying (Plan Only)
+
+To see what Terraform would change without making any changes:
+
+```
+Actions → Apply Infrastructure → Run workflow
+  Environment: dev
+  Target:      all          ← or specific layer
+  Plan only:   true
+```
+
+Check the Actions run output — each layer's plan shows resources to be added/changed/destroyed.
+
+---
+
+## Verifying a Successful Full Deploy
+
+After all 7 layers are green, verify end-to-end:
+
+```bash
+# DNS resolves
 dig dev.medaea.net
 dig dev.ehr.medaea.net
 dig dev.api.medaea.net
@@ -171,26 +244,54 @@ curl -I https://dev.ehr.medaea.net
 curl -I https://dev.api.medaea.net/health
 ```
 
-In the AWS Console, confirm:
+In the AWS Console:
 - **CloudFront** — 3 distributions in `Deployed` state
-- **ECS** — services running with desired count = actual count
+- **ECS** — services running, desired count = running count
 - **RDS** — instance in `available` state
 - **ElastiCache** — cluster in `available` state
 
 ---
 
-## Updating Application Images (ECS)
+## Deploying Application Updates (No Infrastructure Change)
 
-After pushing new Docker images to ECR:
-
-1. The `platform` layer CodeDeploy deployment group automatically handles blue/green
-2. Trigger a new ECS deployment:
+After pushing new Docker images to ECR, trigger a CodeDeploy blue/green deployment:
 
 ```bash
+# Force new ECS deployment (CodeDeploy handles the blue/green swap)
 aws ecs update-service \
   --cluster medaea-dev \
-  --service <service-name> \
+  --service medaea-dev-api \
+  --force-new-deployment
+
+aws ecs update-service \
+  --cluster medaea-dev \
+  --service medaea-dev-frontend \
   --force-new-deployment
 ```
 
-Or trigger through the CodeDeploy console for a controlled blue/green swap.
+Or trigger through the CodeDeploy console for a controlled rollout with health check gates.
+
+**Note:** If you changed the ECS task definition in Terraform, run `Target: platform` instead.
+
+---
+
+## Common Issues
+
+### "Error: AccessDenied — iam:CreatePolicyVersion"
+
+The deploy user is missing the self-service bootstrap inline policy.  
+Run the bootstrap step from Prerequisites again with admin credentials.
+
+### "Error: NoSuchBucket"
+
+The S3 state bucket doesn't exist yet. Run `Target: dns` or `Target: network` first — `ensure-backend` creates the bucket automatically.
+
+### "Error: InvalidParameterException — RDS engine version"
+
+Only `16.4` is available for PostgreSQL in us-east-1 at the time of writing. Check `environments/dev/data/main.tf` and ensure `engine_version = "16.4"`.
+
+### Plan passes but apply fails on edge
+
+Usually means ACM certificate is not yet `Issued`. Wait and retry edge after the cert validates.
+
+See `docs/troubleshooting.md` for more.

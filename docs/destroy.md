@@ -1,152 +1,220 @@
 # Destroy Guide
 
-> How to tear down Medaea infrastructure — a single layer or everything at once.
+> How to safely tear down Medaea infrastructure — full environment or individual layers.
 
 ---
 
-## Important Rules
+## Before You Destroy
 
-- **Production (`prod`) is fully blocked** — the pipeline aborts if you attempt it
-- **Destroy order is strict** — always reverse of deploy order; skipping steps causes errors because lower layers depend on upper layers' resources (security groups, VPCs, etc.)
-- **The S3 state bucket is never auto-destroyed** — it holds all Terraform state; remove it manually at the very end if you want a full wipe
+### Why ensure-iam runs first
 
----
+Both destroy workflows run `ensure-iam` before touching any Terraform state. This is critical because:
 
-## Option A — Destroy Everything (Recommended for full teardown)
+- The deploy user needs `terraform destroy` permissions (same action set as apply — `ec2:DeleteVpc`, `ecs:DeleteCluster`, etc.)
+- IAM policies in AWS can fall out of sync with the repo JSON if deploys haven't run recently
+- Stale permissions are the most common cause of destroy failures
 
-Uses the **Destroy All Infrastructure** workflow which runs all 7 layers in strict sequence automatically.
+The destroy pipeline now guarantees the live AWS policy matches the repo JSON before any layer is destroyed.
 
-### Steps
-
-1. Go to: **GitHub → `Medaea-IAC/infra-live` → Actions → Destroy All Infrastructure → Run workflow**
-
-2. Fill in the form:
-
-   | Field | What to enter |
-   |---|---|
-   | `environment` | `dev` or `staging` |
-   | `confirm` | Type `destroy-all` exactly — anything else aborts |
-
-3. Click **Run workflow**
-
-4. The pipeline runs 7 jobs sequentially:
-
-   ```
-   Safety gate
-       │
-       ▼
-   1. platform  — ECS services, CodeDeploy           (~3 min)
-       │
-       ▼
-   2. edge      — CloudFront, WAF, Route53            (~15 min — CF takes time)
-       │
-       ▼
-   3. secrets   — Secrets Manager entries             (~1 min)
-       │
-       ▼
-   4. compute   — ALB, ECS cluster, ECR, monitoring   (~5 min)
-       │
-       ▼
-   5. data      — RDS, ElastiCache, KMS               (~12 min — RDS takes time)
-       │
-       ▼
-   6. network   — VPC, subnets, NAT gateway            (~3 min)
-       │
-       ▼
-   7. dns       — ACM certificate                     (~2 min)
-       │
-       ▼
-   Summary job  — prints confirmation + next steps
-   ```
-
-   **Expected total time: 30–45 minutes.**
-
-5. After all jobs are green, optionally remove the state bucket:
-
-   ```bash
-   # Empty the bucket first (required before deletion)
-   aws s3 rm s3://medaea-dev-terraform-state --recursive
-
-   # Delete the bucket
-   aws s3 rb s3://medaea-dev-terraform-state
-   ```
-
----
-
-## Option B — Destroy a Single Layer
-
-Use the **Destroy Infrastructure (single layer)** workflow when you only need to tear down one layer (e.g., redeploy data layer from scratch).
-
-### Steps
-
-1. Go to: **GitHub → `Medaea-IAC/infra-live` → Actions → Destroy Infrastructure (single layer) → Run workflow**
-
-2. Fill in the form:
-
-   | Field | What to enter |
-   |---|---|
-   | `environment` | `dev`, `staging`, or `prod` |
-   | `layer` | The layer name (see table below) |
-   | `confirm` | Type `destroy` exactly |
-
-3. Available layers and their destroy impact:
-
-   | Layer | Destroys | Safe to destroy if… |
-   |---|---|---|
-   | `platform` | ECS services, CodeDeploy apps | Always safe (stateless) |
-   | `edge` | CloudFront distros, WAF, Route53 records, S3 buckets | Always safe (stateless) |
-   | `secrets` | Secrets Manager secrets | Safe — dev secrets have 0-day recovery window |
-   | `compute` | ALB, ECS cluster, ECR repos, CloudWatch alarms | Safe after platform is destroyed |
-   | `data` | RDS instance, ElastiCache cluster, KMS keys | **Destroys all data** — ensure backups exist |
-   | `network` | VPC, subnets, NAT gateway, security groups | Safe after data + compute are destroyed |
-   | `dns` | ACM wildcard certificate | Safe after edge is destroyed |
-
-### Single-layer destroy order
-
-If manually destroying multiple layers, follow this order — **each layer must complete before starting the next**:
-
-```
-platform → edge → secrets → compute → data → network → dns
-```
-
----
-
-## Option C — Emergency: Destroy from the CLI
-
-If the pipeline is unavailable, destroy directly with Terraform:
+### Check what exists before destroying
 
 ```bash
-# Clone the repo
-git clone https://github.com/Medaea-IAC/infra-live.git
-cd infra-live
-
-# Set AWS credentials
-export AWS_ACCESS_KEY_ID=...
-export AWS_SECRET_ACCESS_KEY=...
-export AWS_DEFAULT_REGION=us-east-1
-
-# Configure GH_TOKEN for private module access
-git config --global url."https://x-access-token:<GH_TOKEN>@github.com".insteadOf "https://github.com"
-
-# Destroy each layer in order
-for layer in platform edge secrets compute data network dns; do
-  echo "=== Destroying $layer ==="
-  cd environments/dev/$layer
-  terraform init -input=false
-  terraform destroy -input=false -auto-approve
-  cd ../../..
-done
+# List all active resources in the environment
+aws ecs list-clusters
+aws rds describe-db-instances
+aws ec2 describe-vpcs --filters "Name=tag:Environment,Values=dev"
+aws cloudfront list-distributions
 ```
 
 ---
 
-## After a Full Destroy — Re-Deploying
+## Destroy All Layers — Full Teardown
 
-After all layers are destroyed, re-deploy from scratch the same way as the first deploy:
+**Workflow:** `Actions → Destroy All Infrastructure → Run workflow`
 
-1. Push to `develop` (or trigger `workflow_dispatch`)
-2. The `ensure-iam` job recreates all IAM policies automatically
-3. The `ensure-backend` job recreates the S3 state bucket automatically
-4. All layers deploy in sequence
+This tears down all 7 layers in reverse dependency order.  
+Production is blocked — only `dev` and `staging` are available.
 
-**No manual steps required** — the pipeline is fully self-healing.
+### Inputs
+
+| Input | Required | Notes |
+|---|---|---|
+| `environment` | Yes | `dev` or `staging` only |
+| `confirm` | Yes | Must type exactly `destroy-all` |
+
+### Execution order
+
+```
+confirm
+   │
+   ▼
+ensure-iam          ← Updates AWS policies from repo JSON
+   │
+   ▼
+1/7  platform       ← ECS services + CodeDeploy (removed first — no traffic)
+   │
+   ▼
+2/7  edge           ← CloudFront + WAF + Route53 (DNS detached before compute gone)
+   │
+   ▼
+3/7  secrets        ← SSM / Secrets Manager
+   │
+   ▼
+4/7  compute        ← ECS cluster + ALB + ECR
+   │
+   ▼
+5/7  data           ← RDS + ElastiCache + KMS (removed after compute is gone)
+   │
+   ▼
+6/7  network        ← VPC + subnets + NAT (removed after all workloads are gone)
+   │
+   ▼
+7/7  dns            ← ACM certificate (removed last)
+```
+
+Each layer waits for the previous to complete. If any layer fails, subsequent layers are blocked automatically by GitHub Actions job dependencies.
+
+### What is NOT destroyed
+
+- S3 state bucket (`medaea-dev-terraform-state`) — preserved intentionally to avoid losing Terraform state
+- IAM user and policies — preserved so the pipeline can be re-run after destroy
+- ECR images — preserved (ECR repositories are destroyed but images in them are deleted as part of that)
+
+---
+
+## Destroy a Single Layer
+
+**Workflow:** `Actions → Destroy Layer → Run workflow`
+
+Use this when:
+- One layer is broken and you need to recreate it cleanly
+- You want to rebuild data (RDS) after a schema change requires recreation
+- You want to destroy platform (ECS services) only, without touching compute or network
+
+### Inputs
+
+| Input | Options | Notes |
+|---|---|---|
+| `environment` | dev / staging | |
+| `layer` | dns / network / data / secrets / compute / edge / platform | Layer to destroy |
+
+### Important — destroy order matters
+
+When destroying manually, respect the dependency chain or dependent layers will have dangling references:
+
+```
+Safe single-layer destroy order:
+  platform → edge → secrets → compute → data → network → dns
+
+NEVER destroy network before compute (ECS tasks still running in the VPC)
+NEVER destroy dns before edge (CloudFront origin still using the cert)
+NEVER destroy data before compute (ECS tasks still reading from RDS/Redis)
+```
+
+### Example — rebuild the compute layer from scratch
+
+```
+# Step 1: Destroy platform first (ECS services depend on compute)
+Actions → Destroy Layer
+  environment: dev
+  layer: platform
+
+# Step 2: Destroy compute
+Actions → Destroy Layer
+  environment: dev
+  layer: compute
+
+# Step 3: Redeploy compute
+Actions → Apply Infrastructure
+  environment: dev
+  target: compute
+
+# Step 4: Redeploy platform
+Actions → Apply Infrastructure
+  environment: dev
+  target: platform
+```
+
+---
+
+## If Destroy Fails Mid-Run
+
+When a layer fails mid-destroy, GitHub Actions stops subsequent layers automatically (job dependency). The environment is in a partial state.
+
+### Recovery options
+
+**Option A — Fix and retry the failed layer**
+
+Check the failed job output for the specific error. Common causes:
+- IAM permission gap (should be prevented by ensure-iam, but check anyway)
+- Resource has a dependency that wasn't destroyed first
+- AWS rate limiting (retry usually works)
+
+Fix the issue, then re-run just that layer:
+```
+Actions → Destroy Layer → environment: dev, layer: <failed-layer>
+```
+
+**Option B — Force-delete stuck resources via AWS CLI**
+
+If Terraform can't delete a resource (e.g. RDS with deletion protection, or a security group with active ENIs):
+
+```bash
+# Remove RDS deletion protection
+aws rds modify-db-instance \
+  --db-instance-identifier medaea-dev-postgres \
+  --no-deletion-protection
+
+# Detach security group dependencies
+aws ec2 describe-network-interfaces \
+  --filters "Name=group-id,Values=<sg-id>" \
+  --query 'NetworkInterfaces[*].NetworkInterfaceId'
+
+# Then retry the Terraform destroy
+```
+
+**Option C — Manual cleanup**
+
+If Terraform state is corrupt or the destroy can't proceed, use the AWS Console or CLI to manually delete resources, then run `terraform state rm` to remove the resource from state.
+
+---
+
+## Verifying Successful Destroy
+
+After all layers report green:
+
+```bash
+# VPC should be gone
+aws ec2 describe-vpcs \
+  --filters "Name=tag:Name,Values=medaea-dev-vpc" \
+  --query 'Vpcs[].VpcId'
+# Expected: []
+
+# RDS should be gone
+aws rds describe-db-instances \
+  --query 'DBInstances[?DBInstanceIdentifier==`medaea-dev-postgres`]'
+# Expected: []
+
+# ECS cluster should be gone
+aws ecs list-clusters \
+  --query 'clusterArns[?contains(@, `medaea-dev`)]'
+# Expected: []
+
+# CloudFront distributions
+aws cloudfront list-distributions \
+  --query 'DistributionList.Items[?contains(Comment, `medaea-dev`)]'
+# Expected: []
+```
+
+---
+
+## Re-deploying After a Full Destroy
+
+After a successful full destroy, you can redeploy from scratch by following the full deploy sequence in `docs/deploy.md`:
+
+```
+Apply dns → Apply network → Apply data → Apply secrets →
+Apply compute → Apply edge → Apply platform
+```
+
+The S3 state bucket is preserved, so Terraform starts with empty state (all resources recreated).

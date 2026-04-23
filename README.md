@@ -1,62 +1,102 @@
 # Medaea Infrastructure Documentation
 
-Central reference for all infrastructure decisions, pipeline architecture, IAM policies, and operational runbooks for the Medaea EHR platform.
+> Infrastructure-as-code documentation for the Medaea EHR platform.
+> Deployed on AWS ECS Fargate via Terraform 1.7.5 + GitHub Actions.
 
 ---
 
-## Quick Navigation
+## Quick Links
 
 | Document | What it covers |
 |---|---|
-| [**Deploy Guide**](docs/deploy.md) | Step-by-step: first-time bootstrap through fully live deployment |
-| [**Destroy Guide**](docs/destroy.md) | Tear down a single layer or everything at once |
-| [**Layer Reference**](docs/layers.md) | What each Terraform layer manages, inputs/outputs, state keys |
-| [**IAM Reference**](docs/iam.md) | Deploy user policies — what each contains, sizes, how they self-update |
-| [**Troubleshooting**](docs/troubleshooting.md) | Every production error and exactly how it was fixed |
-| [**Current State**](docs/current-state.md) | Live snapshot — policy sizes, module defaults, open PRs |
-| [**Pipeline Architecture**](docs/pipeline.md) | Full deploy pipeline, job order, layer diagram |
-| [**Deployment History**](docs/deployment-history.md) | Chronological change log with PR references |
+| [Pipeline Architecture](docs/pipeline.md) | Three-workflow model — plan, apply, destroy |
+| [Deploy Guide](docs/deploy.md) | Step-by-step deployment instructions |
+| [Destroy Guide](docs/destroy.md) | Safe teardown — full or single layer |
+| [Layers Reference](docs/layers.md) | What each of the 7 layers contains |
+| [IAM Reference](docs/iam.md) | IAM user, policies, self-service bootstrap |
+| [Troubleshooting](docs/troubleshooting.md) | Common errors and fixes |
+| [Current State](docs/current-state.md) | Live environment status and known issues |
 
 ---
 
-## Platform Overview
+## Infrastructure Repositories
+
+| Repo | Purpose |
+|---|---|
+| `Medaea-IAC/infra-live` | Terraform root modules, pipeline workflows, IAM policies |
+| `Medaea-IAC/infra-modules` | Reusable Terraform modules (VPC, ECS, RDS, CloudFront, etc.) |
+| `Medaea-IAC/infrastructure-documentation` | This repo |
+
+---
+
+## Pipeline Summary
+
+### How code changes deploy
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        medaea.net (Route53)                     │
-├──────────────────┬──────────────────────┬───────────────────────┤
-│  dev.medaea.net  │  dev.ehr.medaea.net  │  dev.api.medaea.net   │
-│  Marketing Site  │     EHR Frontend     │     FastAPI Backend    │
-│  (CloudFront→S3) │  (CloudFront→S3)     │  (CloudFront→ALB)     │
-└──────────────────┴──────────────────────┴───────────────────────┘
-                                                    │
-                                            ┌───────┴────────┐
-                                            │  ECS Fargate   │
-                                            │  medaea-dev    │
-                                            └───────┬────────┘
-                          ┌─────────────────────────┼─────────────────────┐
-                    ┌─────┴──────┐          ┌────────┴─────┐    ┌─────────┴──────┐
-                    │ RDS 16.4   │          │ ElastiCache  │    │ Secrets Manager│
-                    │ PostgreSQL │          │ Redis        │    │ + SSM Params   │
-                    └────────────┘          └──────────────┘    └────────────────┘
+Developer pushes to develop
+         │
+         ▼
+   plan.yml runs          ← Auto. Detects changed layers.
+   terraform plan         ← Plan only, never apply.
+   (per changed layer)    ← Results visible in Actions UI.
+         │
+         │ (Human reviews plan output)
+         │
+         ▼
+   apply.yml triggered    ← Manual. Actions → Apply Infrastructure.
+   terraform apply        ← Choose: all layers or a specific one.
 ```
 
-## Key Facts
+### Three workflows
+
+**Push to develop** → `plan.yml` runs automatically  
+- Detects which layer files changed  
+- Runs `terraform plan` only for those layers  
+- Never applies. Safe on every push.  
+
+**Deploy** → `apply.yml` triggered manually  
+- Choose target: `all` or a specific layer  
+- Toggle `plan_only` to preview first  
+- Applies changes in correct dependency order  
+
+**Destroy** → `destroy-all.yml` or `destroy.yml` triggered manually  
+- Always runs `ensure-iam` first (policy sync before destroy)  
+- Full destroy: reverse layer order  
+- Single layer: pick from dropdown  
+
+---
+
+## AWS Account
 
 | Item | Value |
 |---|---|
-| AWS Account | `009952409575` |
-| Primary region | `us-east-1` |
-| Deploy IAM user | `github-deploy-user-medaea-01` |
+| Account ID | `009952409575` |
+| Region | `us-east-1` |
+| Deploy user | `github-deploy-user-medaea-01` |
+| State bucket | `medaea-dev-terraform-state` |
 | Terraform version | `1.7.5` |
-| State backend | S3 `medaea-dev-terraform-state` (native S3 locking — no DynamoDB) |
-| Module source | `Medaea-IAC/infra-modules @ develop` |
 
-## GitHub Repositories
+---
 
-| Repository | Purpose |
-|---|---|
-| `Medaea-IAC/infra-live` | Terraform live configs, pipeline YAML, IAM policy JSON |
-| `Medaea-IAC/infra-modules` | Reusable Terraform modules |
-| `Medaea-Development/medaea-platform` | Application monorepo (frontend + EHR + backend) |
-| `Medaea-IAC/infrastructure-documentation` | This repo |
+## Environment Domains
+
+| Domain | Environment | Target |
+|---|---|---|
+| `dev.medaea.net` | dev | Marketing website (S3 + CloudFront) |
+| `dev.ehr.medaea.net` | dev | EHR frontend (React, S3 + CloudFront) |
+| `dev.api.medaea.net` | dev | FastAPI backend (ECS Fargate + ALB + CloudFront) |
+
+---
+
+## Layer Overview
+
+| # | Layer | Key Resources | Deploy time |
+|---|---|---|---|
+| 1 | `dns` | ACM wildcard cert | 5–30 min (cert validation) |
+| 2 | `network` | VPC, subnets, NAT, SGs | 2–5 min |
+| 3 | `data` | RDS PostgreSQL 16.4, ElastiCache Redis, KMS | 10–20 min |
+| 4 | `secrets` | SSM parameters | < 1 min |
+| 5 | `compute` | ECS cluster, ALB, ECR repos, CloudWatch | 3–8 min |
+| 6 | `edge` | CloudFront (3 distros), WAFv2, Route53 aliases | 5–15 min |
+| 7 | `platform` | ECS services (Fargate), CodeDeploy blue/green | 5–10 min |
